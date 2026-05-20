@@ -1,38 +1,63 @@
-FROM php:8.3-fpm-alpine
-
-# Install production system dependencies
-RUN apk add --no-cache \
-    nginx \
-    icu-dev \
-    libzip-dev \
-    zip \
-    unzip \
-    git \
-    && docker-php-ext-install intl pdo_mysql zip opcache
-
-# Copy stable Composer binary
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+FROM php:8.3-fpm as builder
 
 WORKDIR /app
 
-# Copy server configuration paths
-COPY nginx.conf /etc/nginx/nginx.conf
-COPY nginx-main.conf /etc/nginx/conf.d/default.conf
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN apt-get update && apt-get install -y \
+    git \
+    unzip \
+    curl \
+    nodejs \
+    npm \
+    && docker-php-ext-install pdo pdo_mysql \
+    && rm -rf /var/lib/apt/lists/*
 
-# Grant execution permissions (strip CRLF when built on Windows hosts)
-RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh \
-    && chmod +x /usr/local/bin/entrypoint.sh
+# THE FIX: We bypass curl entirely and copy the pre-compiled binary
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Copy your source files and establish system permissions
-COPY . /app
-RUN mkdir -p var/cache var/log /var/log/nginx \
-    && chown -R www-data:www-data /app /var/log/nginx
-
-# Install isolated vendor components without dev tools
 ENV COMPOSER_ALLOW_SUPERUSER=1
-RUN composer install --no-dev --optimize-autoloader --no-scripts
 
-EXPOSE 8080
+COPY composer.json composer.lock ./
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+RUN composer install --no-interaction --no-scripts --optimize-autoloader
+
+COPY . .
+
+RUN if [ ! -f /app/.env ]; then echo "APP_ENV=${APP_ENV:-prod}\nAPP_DEBUG=${APP_DEBUG:-false}\nAPP_SECRET=${APP_SECRET:-ChangeMe}\n" > /app/.env; fi
+
+# Now run post-install scripts after app code is available
+RUN composer install --no-interaction --optimize-autoloader --no-ansi || true
+RUN php bin/console importmap:install --no-interaction
+
+RUN php bin/console cache:warmup --env=prod --no-debug || true
+
+FROM php:8.3-fpm as runtime
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    nginx \
+    curl \
+    && docker-php-ext-install pdo pdo_mysql \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app /app
+
+RUN mkdir -p /app/var && \
+    chown -R www-data:www-data /app && \
+    chmod -R 755 /app && \
+    chmod -R 775 /app/var
+
+COPY nginx-main.conf /etc/nginx/nginx.conf
+
+RUN rm -rf /etc/nginx/conf.d/* /etc/nginx/sites-enabled /etc/nginx/sites-available
+COPY nginx.conf /etc/nginx/conf.d/symfony.conf
+
+COPY entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost/ || exit 1
+
+EXPOSE 80
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
