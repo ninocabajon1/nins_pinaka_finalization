@@ -1,0 +1,39 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app:cached
+      - ./nginx-main.conf:/etc/nginx/conf.d/default.conf
+      - vendor_data:/app/vendor
+    environment:
+      APP_ENV: dev
+      APP_SECRET: ccb95dfda7863df70c5e64a13b63293e
+      DATABASE_URL: "mysql://symfony_user:symfony_pass@db:3306/symfony_db?serverVersion=8.0.32&charset=utf8mb4"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: root_secure_password
+      MYSQL_DATABASE: symfony_db
+      MYSQL_USER: symfony_user
+      MYSQL_PASSWORD: symfony_pass
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-usymfony_user", "-psymfony_pass"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  db_data:
+  vendor_data:
