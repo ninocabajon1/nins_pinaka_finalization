@@ -5,6 +5,9 @@ set -e
 echo "Running database migrations..."
 php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration
 
+# Substitute Railway's dynamic PORT into Nginx config (default to 80 for local dev)
+sed -i "s/__PORT__/${PORT:-80}/g" /etc/nginx/conf.d/symfony.conf
+
 echo "Starting PHP-FPM..."
 php-fpm -F &
 PHP_PID=$!
