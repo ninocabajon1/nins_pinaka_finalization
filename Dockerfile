@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     && docker-php-ext-install pdo pdo_mysql \
     && rm -rf /var/lib/apt/lists/*
 
-# THE FIX: We bypass curl entirely and copy the pre-compiled binary
+# Copy composer binary
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 ENV COMPOSER_ALLOW_SUPERUSER=1
@@ -22,12 +22,14 @@ RUN composer install --no-interaction --no-scripts --optimize-autoloader
 
 COPY . .
 
-RUN if [ ! -f /app/.env ]; then echo "APP_ENV=${APP_ENV:-prod}\nAPP_DEBUG=${APP_DEBUG:-false}\nAPP_SECRET=${APP_SECRET:-ChangeMe}\n" > /app/.env; fi
+# Create .env if it doesn't exist
+RUN if [ ! -f /app/.env ]; then echo "APP_ENV=prod\nAPP_DEBUG=false\nAPP_SECRET=ChangeMe\n" > /app/.env; fi
 
-# Now run post-install scripts after app code is available
+# Run post-install scripts after app code is available
 RUN composer install --no-interaction --optimize-autoloader --no-ansi || true
-RUN php bin/console importmap:install --no-interaction
+RUN php bin/console importmap:install --no-interaction || true
 
+# Warm up cache for production
 RUN php bin/console cache:warmup --env=prod --no-debug || true
 
 FROM php:8.3-fpm as runtime
@@ -40,21 +42,27 @@ RUN apt-get update && apt-get install -y \
     && docker-php-ext-install pdo pdo_mysql \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy application from builder
 COPY --from=builder /app /app
 
+# Set proper permissions
 RUN mkdir -p /app/var && \
     chown -R www-data:www-data /app && \
     chmod -R 755 /app && \
-    chmod -R 775 /app/var
+    chmod -R 775 /app/var && \
+    chmod -R 775 /app/var/cache && \
+    chmod -R 775 /app/var/log
 
+# Configure Nginx
 COPY nginx-main.conf /etc/nginx/nginx.conf
-
 RUN rm -rf /etc/nginx/conf.d/* /etc/nginx/sites-enabled /etc/nginx/sites-available
 COPY nginx.conf /etc/nginx/conf.d/symfony.conf
 
+# Copy entrypoint
 COPY entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
+# Health check
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost/ || exit 1
 

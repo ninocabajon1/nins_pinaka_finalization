@@ -1,0 +1,11 @@
+framework:
+    # Production optimizations
+    http_method_override: false
+    trusted_hosts: ~
+    session:
+        handler_id: null
+        cookie_secure: auto
+        cookie_httponly: true
+        cookie_samesite: lax
+    php_errors:
+        log: true
